@@ -333,6 +333,10 @@
 <div id="modal-celebrate" class="hidden fixed inset-0 z-[110] bg-black/85 flex flex-col items-center justify-center gap-4 p-4">
   <video id="celebrate-video" src="./check-ok.mp4" playsinline webkit-playsinline preload="auto" class="max-w-full max-h-[72vh] rounded-2xl bg-black"></video>
   <p id="celebrate-text" class="shrink-0 max-w-full px-4 text-center text-lg font-bold text-white drop-shadow"></p>
+  <div id="celebrate-actions" class="hidden shrink-0 flex items-center gap-3">
+    <button id="celebrate-replay" class="px-6 py-2.5 rounded-lg border border-white/60 text-white font-semibold text-sm">再看一次</button>
+    <button id="celebrate-ok" class="px-6 py-2.5 rounded-lg bg-brand text-white font-semibold text-sm">好的！</button>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -424,7 +428,9 @@ function stopCheckinCelebration() {
   if (_celebrationTimer) { clearTimeout(_celebrationTimer); _celebrationTimer = null; }
   const overlay = $('#modal-celebrate');
   const video = $('#celebrate-video');
+  const actions = $('#celebrate-actions');
   if (overlay) overlay.classList.add('hidden');
+  if (actions) actions.classList.add('hidden');
   if (video) { try { video.pause(); } catch {} }
   try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch {}
 }
@@ -770,33 +776,40 @@ function playCheckinCelebration() {
   if (!overlay || !video) return;
   const txt = $('#celebrate-text');
   if (txt) txt.textContent = `恭喜${(state.userDoc && state.userDoc.name) || '學員'}完成報到，讓我們來找座位吧！`;
+  const actions = $('#celebrate-actions');
+  const showActions = () => { if (actions) actions.classList.remove('hidden'); };
+  if (actions) actions.classList.add('hidden');
   speakCheckinCongratulations();
   overlay.classList.remove('hidden');
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    if (_celebrationTimer) { clearTimeout(_celebrationTimer); _celebrationTimer = null; }
-    overlay.classList.add('hidden');
-    try { video.pause(); } catch {}
-    if ($('.course-tab-btn[data-tab="seat"]')) openCourseTab('seat');
-  };
-  video.onended = finish;
-  video.onerror = finish;
-  const armSafety = (ms) => { if (_celebrationTimer) clearTimeout(_celebrationTimer); _celebrationTimer = setTimeout(finish, ms); };
-  try { video.currentTime = 0; } catch {}
-  const p = video.play();
-  if (p && typeof p.catch === 'function') p.catch(() => {});
-  // 影片無法播放或缺少檔案時的保險計時，避免畫面卡住
-  if (isFinite(video.duration) && video.duration > 0) armSafety(video.duration * 1000 + 800);
+  // 影片播放結束（或無法播放）→ 顯示「再看一次 / 好的！」按鈕
+  video.onended = showActions;
+  video.onerror = showActions;
+  replayCheckinCelebration();
+  // 保險：影片停滯時仍顯示按鈕，避免畫面卡住
+  const armSafety = (ms) => { if (_celebrationTimer) clearTimeout(_celebrationTimer); _celebrationTimer = setTimeout(showActions, ms); };
+  if (isFinite(video.duration) && video.duration > 0) armSafety(video.duration * 1000 + 1200);
   else {
     armSafety(12000);
     video.addEventListener('loadedmetadata', () => {
-      if (done) return;
+      if (actions && !actions.classList.contains('hidden')) return;
       const d = isFinite(video.duration) && video.duration > 0 ? video.duration * 1000 : 8000;
-      armSafety(d + 800);
+      armSafety(d + 1200);
     }, { once: true });
   }
+}
+function replayCheckinCelebration() {
+  const video = $('#celebrate-video');
+  const actions = $('#celebrate-actions');
+  if (!video) return;
+  if (actions) actions.classList.add('hidden');
+  try { video.currentTime = 0; } catch {}
+  const p = video.play();
+  if (p && typeof p.catch === 'function') p.catch(() => { if (actions) actions.classList.remove('hidden'); });
+  if (_celebrationTimer) { clearTimeout(_celebrationTimer); _celebrationTimer = null; }
+}
+function goToSeatFromCelebration() {
+  stopCheckinCelebration();
+  if ($('.course-tab-btn[data-tab="seat"]')) openCourseTab('seat');
 }
 /* ===== 座位（學員端） ===== */
 function seatConfigStudent(course) {
@@ -939,17 +952,28 @@ async function showSeatOccupant(code) {
   const byCode = seatOccupancyStudent(state.activeCourse);
   const entry = byCode[code];
   if (!entry) { toast('此座位尚無資料'); return; }
-  toast('載入中…');
-  let u = {};
-  try {
-    const snap = await getDoc(doc(db, 'users', entry.uid));
-    u = snap.exists() ? snap.data() : {};
-  } catch { /* 忽略讀取失敗，僅顯示已知資訊 */ }
+  // 優先讀取課程文件內由服務端寫入的 seatInfo（學員無法讀取他人 users 文件）
+  const infoMap = (state.activeCourse && state.activeCourse.seatInfo && typeof state.activeCourse.seatInfo === 'object') ? state.activeCourse.seatInfo : {};
+  const info = infoMap[entry.uid] || null;
+  let name = info?.name || '';
+  let community = info?.community || '';
+  let title = info?.title || '';
+  if (!info) {
+    try {
+      const snap = await getDoc(doc(db, 'users', entry.uid));
+      if (snap.exists()) {
+        const u = snap.data() || {};
+        name = name || u.name || '';
+        community = community || u.community || u.unit || '';
+        title = title || u.title || '';
+      }
+    } catch { /* 權限不足時忽略，僅顯示已知資訊 */ }
+  }
   showSeatInfoModal({
     code,
-    community: u.community || '—',
-    title: u.title || '—',
-    name: u.name || '學員'
+    community: community || '—',
+    title: title || '—',
+    name: name || '學員'
   });
 }
 async function pickSeatStudent(code) {
@@ -1813,6 +1837,9 @@ $('#confirm-cancel').addEventListener('click', () => closeConfirm(false));
 $('#modal-confirm').addEventListener('click', (e) => { if (e.target === $('#modal-confirm')) closeConfirm(false); });
 $('#seat-info-close').addEventListener('click', () => $('#modal-seat-info').classList.add('hidden'));
 $('#modal-seat-info').addEventListener('click', (e) => { if (e.target === $('#modal-seat-info')) $('#modal-seat-info').classList.add('hidden'); });
+/* 報到成功慶祝按鈕 */
+$('#celebrate-replay').addEventListener('click', replayCheckinCelebration);
+$('#celebrate-ok').addEventListener('click', goToSeatFromCelebration);
 setupPreviewZoom();
 $('#btn-save-profile').addEventListener('click', saveProfile);
 

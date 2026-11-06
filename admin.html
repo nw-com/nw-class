@@ -2028,6 +2028,44 @@ function studentByUid(uid) {
   if (!uid) return null;
   return state.courseStudents.find(u => (u.uid || u.id) === uid) || null;
 }
+/* 座位人員顯示資訊（寫入課程文件 seatInfo，供學員端讀取） */
+function seatInfoOf(stu) {
+  return {
+    name: String(stu?.name || ''),
+    community: String(stu?.community || stu?.unit || ''),
+    title: String(stu?.title || '')
+  };
+}
+/* 補寫既有座位的 seatInfo（服務端載入學員名單後自動執行一次） */
+let _seatInfoWriting = false;
+async function ensureSeatInfo() {
+  if (_seatInfoWriting || !state.activeCourse) return;
+  if (!state.courseStudents.length) return;
+  const assignments = seatAssignmentsOf(state.activeCourse);
+  const uids = [...new Set(Object.values(assignments))].filter(Boolean);
+  if (!uids.length) return;
+  const info = (state.activeCourse.seatInfo && typeof state.activeCourse.seatInfo === 'object' && !Array.isArray(state.activeCourse.seatInfo)) ? state.activeCourse.seatInfo : {};
+  const payload = {};
+  uids.forEach(uid => {
+    const stu = studentByUid(uid);
+    if (!stu) return;
+    const next = seatInfoOf(stu);
+    const cur = info[uid];
+    if (!cur || cur.name !== next.name || cur.community !== next.community || cur.title !== next.title) {
+      payload['seatInfo.' + uid] = next;
+    }
+  });
+  if (!Object.keys(payload).length) return;
+  _seatInfoWriting = true;
+  try {
+    await updateDoc(doc(db, 'courses', state.activeCourse.id), payload);
+    const next = { ...info };
+    Object.keys(payload).forEach(k => { next[k.replace('seatInfo.', '')] = payload[k]; });
+    state.activeCourse.seatInfo = next;
+    if (state.courseMap[state.activeCourse.id]) state.courseMap[state.activeCourse.id].seatInfo = next;
+  } catch { /* 補寫失敗不影響主流程 */ }
+  finally { _seatInfoWriting = false; }
+}
 function renderSeatMap() {
   const box = $('#seat-map');
   if (!box) return;
@@ -2041,6 +2079,7 @@ function renderSeatMap() {
   const occupancy = seatOccupancyOf(state.activeCourse);
   const assignedCount = Object.keys(occupancy).length;
   if (meta) meta.textContent = `${rows} 排 × ${cols} 列${aisles.length ? ' · 走道 ' + aisles.join('、') : ''} · 已指派 ${assignedCount} 人${allowSelfSelect ? ' · 開放自選' : ''}`;
+  ensureSeatInfo();
   const aisleSet = new Set(aisles);
   let colsTmpl = '1.75rem';
   for (let c = 1; c <= cols; c++) {
@@ -2183,6 +2222,9 @@ async function assignSeatToUser(uid) {
   const code = state.pendingSeatCode;
   const assignments = seatAssignmentsOf(state.activeCourse);
   const payload = { ['seatAssignments.' + code]: uid };
+  // 同步寫入學員顯示資訊（供學員端讀取，避免學員讀取他人 users 文件）
+  const stu = studentByUid(uid);
+  if (stu) payload['seatInfo.' + uid] = seatInfoOf(stu);
   Object.entries(assignments).forEach(([k, v]) => { if (v === uid && k !== code) payload['seatAssignments.' + k] = deleteField(); });
   // 服務指派優先：指派時同步移除該學員的自選座位
   if (seatSelfPicksOf(state.activeCourse)[uid]) payload['seatSelfPicks.' + uid] = deleteField();
@@ -2690,6 +2732,7 @@ async function loadCourseStudents() {
       .sort((a, b) => String(communitySortKey(a)).localeCompare(String(communitySortKey(b)), 'zh-Hant', { numeric: true })
         || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant'));
     renderCourseStudents();
+    ensureSeatInfo();
   }, () => {
     state.courseStudents = [];
     list.innerHTML = '<p class="text-slate-400 text-center py-2 text-xs">載入失敗</p>';
