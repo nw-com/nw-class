@@ -3210,13 +3210,33 @@ async function saveLiveUrl() {
 
 /* ===== 展示連結（open.html）：課程卡「連結」按鈕與 QR 免登入頁 ===== */
 function courseOpenLinkEnabled(c) { return c?.openLink !== false; }
-function openViewUrl(courseId) {
-  return location.origin + location.pathname.replace(/[^/]*$/, '') + 'open.html?c=' + encodeURIComponent(courseId);
+function openViewUrl(courseId, role) {
+  let u = location.origin + location.pathname.replace(/[^/]*$/, '') + 'open.html?c=' + encodeURIComponent(courseId);
+  if (role) u += '&role=' + encodeURIComponent(role);
+  return u;
+}
+function isPwaStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.navigator.standalone === true;
 }
 function openCourseLink(courseId) {
   const c = state.courseMap[courseId] || (state.activeCourse && state.activeCourse.id === courseId ? state.activeCourse : null);
   if (!c) return;
-  window.open(openViewUrl(c.id), '_blank', 'noopener');
+  const dataUrl = openViewUrl(c.id, 'data');
+  const menuUrl = openViewUrl(c.id, 'menu');
+  if (isPwaStandalone()) {
+    // PWA（已安裝 App）：open.html 位於 manifest scope 內，去掉視窗尺寸參數讓瀏覽器
+    // 以「獨立 App 視窗（無網址列）」開啟 menu 與 data 各自一個視窗
+    [dataUrl, menuUrl].forEach(u => {
+      const w = window.open(u, '_blank');
+      if (w) { try { w.opener = null; } catch {} }
+    });
+  } else {
+    // 一般瀏覽器：data 一般分頁，menu 以手機直屏比例（9:21 ≈ 21:9 直向）彈窗
+    window.open(dataUrl, '_blank', 'noopener');
+    window.open(menuUrl, '_blank', 'popup=yes,noopener,width=420,height=980');
+  }
 }
 async function setCourseOpenLink(on) {
   if (!state.activeCourse) return;
