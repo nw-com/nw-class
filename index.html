@@ -464,8 +464,25 @@
   <video id="celebrate-video" src="./check-ok.mp4" playsinline webkit-playsinline preload="auto" class="max-w-full max-h-[72vh] rounded-2xl bg-black"></video>
   <p id="celebrate-text" class="shrink-0 max-w-full px-4 text-center text-lg font-bold text-white drop-shadow"></p>
   <div id="celebrate-actions" class="hidden shrink-0 flex items-center gap-3">
-    <button id="celebrate-replay" class="px-6 py-2.5 rounded-lg border border-white/60 text-white font-semibold text-sm">再看一次</button>
-    <button id="celebrate-ok" class="px-6 py-2.5 rounded-lg bg-brand text-white font-semibold text-sm">好的！</button>
+    <button id="celebrate-replay" class="px-8 py-4 rounded-xl border border-white/60 text-white font-semibold text-lg">再看一次</button>
+    <button id="celebrate-ok" class="px-8 py-4 rounded-xl bg-brand text-white font-semibold text-lg">好的！</button>
+  </div>
+</div>
+
+<!-- 報到簽名（掃碼後、播放報到成功影片前） -->
+<div id="modal-checkin-sign" class="hidden fixed inset-0 z-[120] bg-black/80 flex flex-col items-center justify-center gap-4 p-4">
+  <div class="w-full max-w-md bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden">
+    <div class="shrink-0 px-4 py-3 border-b border-slate-100">
+      <p class="text-base font-bold text-slate-900 text-center">請簽名</p>
+      <p class="text-[11px] text-slate-400 text-center mt-0.5">請於下方欄位完成簽名後按「確認」</p>
+    </div>
+    <div class="p-4">
+      <canvas id="checkin-sign-pad" class="block w-full rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 touch-none" style="height:40vh;max-height:320px;"></canvas>
+    </div>
+    <div class="shrink-0 px-4 pb-4 grid grid-cols-2 gap-3">
+      <button id="checkin-sign-clear" class="py-3 rounded-xl border border-slate-300 text-slate-600 font-semibold">清除</button>
+      <button id="checkin-sign-confirm" class="py-3 rounded-xl bg-brand text-white font-semibold">確認</button>
+    </div>
   </div>
 </div>
 
@@ -569,6 +586,77 @@ function stopCheckinCelebration() {
   try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch {}
 }
 
+/* ===== 報到簽名（服務端開啟「簽名」時，掃碼後、播放報到成功影片前先簽名） ===== */
+let _signCtx = null, _signDrawing = false, _signDrawn = false;
+function setupSignaturePad() {
+  const canvas = $('#checkin-sign-pad');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(rect.width * dpr));
+  canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#0f172a';
+  _signCtx = ctx;
+  _signDrawn = false;
+}
+function clearSignaturePad() {
+  const canvas = $('#checkin-sign-pad');
+  if (!canvas || !_signCtx) return;
+  _signCtx.clearRect(0, 0, canvas.width, canvas.height);
+  _signDrawn = false;
+}
+function signPointerPos(e) {
+  const rect = $('#checkin-sign-pad').getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+function openCheckinSignature() {
+  const overlay = $('#modal-checkin-sign');
+  if (!overlay) { playCheckinCelebration(); return; }
+  overlay.classList.remove('hidden');
+  // 等版面呈現後再依實際尺寸建立畫布
+  requestAnimationFrame(() => { setupSignaturePad(); clearSignaturePad(); });
+}
+function closeCheckinSignature() {
+  const overlay = $('#modal-checkin-sign');
+  if (overlay) overlay.classList.add('hidden');
+  _signDrawing = false;
+}
+function initSignaturePadEvents() {
+  const canvas = $('#checkin-sign-pad');
+  if (!canvas) return;
+  const start = (e) => {
+    if (!_signCtx) return;
+    e.preventDefault();
+    _signDrawing = true;
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
+    const p = signPointerPos(e);
+    _signCtx.beginPath();
+    _signCtx.moveTo(p.x, p.y);
+    _signCtx.lineTo(p.x, p.y);
+    _signCtx.stroke();
+    _signDrawn = true;
+  };
+  const move = (e) => {
+    if (!_signDrawing || !_signCtx) return;
+    e.preventDefault();
+    const p = signPointerPos(e);
+    _signCtx.lineTo(p.x, p.y);
+    _signCtx.stroke();
+    _signDrawn = true;
+  };
+  const end = () => { _signDrawing = false; };
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+}
+initSignaturePadEvents();
+
 /* 選擇課程頁背景影片：進入時循環播放，離開時停止 */
 function toggleCourseSelectBg(active) {
   const v = $('#course-select-bg');
@@ -583,7 +671,7 @@ function toggleCourseSelectBg(active) {
 
 function showView(name) {
   if (name === 'dashboard' && !state.activeCourse) name = 'course-select';
-  if (name !== 'dashboard') stopCheckinCelebration();
+  if (name !== 'dashboard') { stopCheckinCelebration(); closeCheckinSignature(); }
   if (name !== 'profile') cleanupListener('unsubCheckins');
   if (name !== 'dashboard') { cleanupListener('unsubCourseCheckin'); cleanupListener('unsubCertTitle'); cleanupListener('unsubCourseDoc'); cleanupVoteListeners(); cleanupBuzzListeners(); cleanupCourseFileListeners(); cleanupActivityListeners(); cleanupExamListeners(); cleanupSeatListener(); }
   $$('section[id^="view-"]').forEach(s => s.classList.add('hidden'));
@@ -903,7 +991,11 @@ function watchCourseCheckin() {
     const justCheckedIn = has && !state.courseCheckedIn;
     state.courseCheckedIn = has;
     renderCourseButtons();
-    if (justCheckedIn) playCheckinCelebration();
+    if (justCheckedIn) {
+      // 服務端開啟「簽名」時，先顯示簽名視窗，確認後才播放報到成功影片
+      if (state.activeCourse && state.activeCourse.checkinSignature === true) openCheckinSignature();
+      else playCheckinCelebration();
+    }
   }, () => {});
 }
 /* ===== 學員報到頁（一頁式：上課證 + QR Code） ===== */
@@ -1007,11 +1099,13 @@ function renderCheckinQr() {
 let _celebrationTimer = null;
 function pickBoyVoice(voices) {
   if (!voices || !voices.length) return null;
-  const zh = voices.filter(v => /^(zh|cmn)/i.test(v.lang || ''));
+  const zh = voices.filter(v => /^(zh|cmn|yue)/i.test(v.lang || ''));
   const pool = zh.length ? zh : voices;
-  // 優先挑選名稱含男童/男孩/男聲關鍵字的語音
-  return pool.find(v => /(child|kid|boy|young|male|童|男)/i.test(v.name || ''))
-    || pool.find(v => /zh[-_]TW|zh[-_]HK/i.test(v.lang || ''))
+  const find = (re) => pool.find(v => re.test(v.name || ''));
+  // 依序挑選：男童／男孩嗓音 → 男聲 → 中文嗓音（再由 pitch 提高模擬男童）
+  return find(/kangkang|boy|kid|child|junior|童|男孩/i)
+    || find(/male|man|男|yunxi|yunjian|yunjie/i)
+    || find(/zh[-_](cn|tw|hk)/i)
     || pool[0] || null;
 }
 function speakCheckinCongratulations() {
@@ -1024,8 +1118,8 @@ function speakCheckinCongratulations() {
       try {
         const u = new SpeechSynthesisUtterance(text);
         u.lang = 'zh-TW';
-        u.pitch = 1.4;   // 提高音調，模擬男童聲
-        u.rate = 1.0;
+        u.pitch = 1.6;   // 提高音調，模擬男童聲
+        u.rate = 1.05;
         const v = pickBoyVoice(synth.getVoices());
         if (v) u.voice = v;
         synth.cancel();
@@ -2982,6 +3076,12 @@ $('#modal-seat-info').addEventListener('click', (e) => { if (e.target === $('#mo
 /* 報到成功慶祝按鈕 */
 $('#celebrate-replay').addEventListener('click', replayCheckinCelebration);
 $('#celebrate-ok').addEventListener('click', goToSeatFromCelebration);
+$('#checkin-sign-clear').addEventListener('click', clearSignaturePad);
+$('#checkin-sign-confirm').addEventListener('click', () => {
+  if (!_signDrawn) { toast('請先完成簽名'); return; }
+  closeCheckinSignature();
+  playCheckinCelebration();
+});
 setupPreviewZoom();
 $('#btn-save-profile').addEventListener('click', saveProfile);
 
